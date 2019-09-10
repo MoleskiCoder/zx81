@@ -6,6 +6,7 @@
 #include <Bus.h>
 #include <InputOutput.h>
 #include <Ram.h>
+#include <UnusedMemory.h>
 
 #include <Z80.h>
 #include <Profiler.h>
@@ -16,6 +17,8 @@
 class Configuration;
 class ColourPalette;
 
+// Models a PAL (i.e. 50Hz) Sinclair ZX81 with 16K expansion
+
 class Board final : public EightBit::Bus {
 public:
 	Board(const ColourPalette& palette, const Configuration& configuration);
@@ -24,8 +27,8 @@ public:
 	Ula &ULA() { return m_ula; }
 	EightBit::InputOutput &ports() { return m_ports; }
 	EightBit::Rom& ROM() { return m_basicRom; }
-	EightBit::Ram& VRAM() { return m_contendedRam; }
-	EightBit::Ram& WRAM() { return m_uncontendedRam; }
+	EightBit::Ram& RAM() { return m_externalRam; }
+	EightBit::UnusedMemory& unused() { return m_unused; }
 
 	void plug(const std::string& path);
 	void loadSna(const std::string& path);
@@ -48,20 +51,15 @@ private:
 	EightBit::Z80 m_cpu;
 	Ula m_ula;
 
-	EightBit::Rom m_basicRom;				//0000h - 3FFFh  ROM(BASIC)
-	EightBit::Ram m_contendedRam = 0x4000;	//4000h - 7FFFh  RAM(Work RAM and VRAM) (with waitstates)
-	EightBit::Ram m_uncontendedRam = 0x8000;//8000h - FFFFh  Additional RAM
+	EightBit::Rom m_basicRom;								//0000h - 1FFFh  ROM(BASIC)
+	EightBit::Ram m_externalRam = 0x4000;					//2000h - 5FFFh  RAM(External RAM pack)
+	EightBit::UnusedMemory m_unused = { 0xa000, 0xff } ;	//6000h - FFFFh  Unused address space
 
 	EightBit::Disassembler m_disassembler;
 	EightBit::Profiler m_profiler;
 
 	int m_frameCycles = 0;
 	int m_allowed = 0;	// To track "overdrawn" cycle expendature
-
-	void Cpu_ExecutingInstruction_Debug(const EightBit::Z80& cpu);
-	void Cpu_ExecutingInstruction_Profile(const EightBit::Z80& cpu);
-
-	void Ula_Proceed(const int& cycles);
 
 	void resetFrameCycles() { m_frameCycles = 0; }
 	void runCycles(int suggested);

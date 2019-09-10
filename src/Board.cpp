@@ -5,6 +5,7 @@
 #include "Z80File.h"
 
 #include <iostream>
+#include <sstream>
 
 Board::Board(const ColourPalette& palette, const Configuration& configuration)
 : m_configuration(configuration),
@@ -21,16 +22,39 @@ void Board::initialise() {
 	plug(romDirectory + "\\zx81.rom");	// ZX-81 Basic
 
 	if (m_configuration.isProfileMode()) {
-		CPU().ExecutingInstruction.connect(std::bind(&Board::Cpu_ExecutingInstruction_Profile, this, std::placeholders::_1));
+		CPU().ExecutingInstruction.connect([this](const EightBit::Z80&) {
+			const auto pc = CPU().PC();
+			m_profiler.addAddress(pc.word);
+			m_profiler.addInstruction(peek(pc.word));
+		});
 	}
 
 	if (m_configuration.isDebugMode()) {
-		CPU().ExecutingInstruction.connect(std::bind(&Board::Cpu_ExecutingInstruction_Debug, this, std::placeholders::_1));
+
+		CPU().ExecutingInstruction.connect([this](const EightBit::Z80&) {
+			const auto state = EightBit::Disassembler::state(CPU());
+			const auto lineCounter = ((const Ula&)ULA()).LINECNTR();
+			const auto allowNMI = ((const Ula&)ULA()).NMI();
+			const auto disassembled = m_disassembler.disassemble(CPU());
+
+			std::ostringstream output;
+			output
+				<< state
+				<< " " << disassembled
+				<< "    ; " << "NMI=" << allowNMI << ", LINECNTR=" << lineCounter;
+
+			std::cerr << output.str();
+		});
+
+
+		CPU().ExecutedInstruction.connect([this](const EightBit::Z80& cpu) {
+			std::cerr << ", CYCLES=" << cpu.cycles() << std::endl;
+		});
 	}
 
-	ULA().Proceed.connect(std::bind(&Board::Ula_Proceed, this, std::placeholders::_1));
-
-	ULA().initialise();
+	ULA().Proceed.connect([this](const int& cycles) {
+		runCycles(cycles);
+	});
 }
 
 void Board::plug(const std::string& path) {
@@ -49,6 +73,7 @@ void Board::loadZ80(const std::string& path) {
 
 void Board::raisePOWER() {
 	EightBit::Bus::raisePOWER();
+	ULA().raisePOWER();
 	CPU().raisePOWER();
 	CPU().lowerRESET();
 	CPU().raiseHALT();
@@ -57,43 +82,19 @@ void Board::raisePOWER() {
 }
 
 void Board::lowerPOWER() {
+	ULA().lowerPOWER();
 	CPU().lowerPOWER();
 	EightBit::Bus::lowerPOWER();
 }
 
-void Board::Cpu_ExecutingInstruction_Profile(const EightBit::Z80& cpu) {
-	const auto pc = CPU().PC();
-	m_profiler.addAddress(pc.word);
-	m_profiler.addInstruction(peek(pc.word));
-}
-
-void Board::Cpu_ExecutingInstruction_Debug(const EightBit::Z80& cpu) {
-	const auto state = EightBit::Disassembler::state(CPU());
-	const auto disassembled = m_disassembler.disassemble(CPU());
-	assert(!disassembled.empty());
-	std::cerr
-		<< state
-		<< " "
-		<< disassembled
-		<< '\n';
-}
-
-EightBit::MemoryMapping Board::mapping(const uint16_t address) {
-	if (address < 0x4000)
-		return { ROM(), 0x0000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadOnly };
-	if (address < 0x8000)
-		return { VRAM(), 0x4000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadWrite };
-	return { WRAM(), 0x8000, 0xffff,  EightBit::MemoryMapping::AccessLevel::ReadWrite };
+EightBit::MemoryMapping Board::mapping(uint16_t address) {
+	return ULA().mapping(address);	// The ULA is responsible for managing the BUS mapping
 }
 
 void Board::runFrame() {
 	resetFrameCycles();
 	for (int i = 0; i < Ula::TotalHeight; ++i)
 		ULA().renderLine(i);
-}
-
-void Board::Ula_Proceed(const int& cycles) {
-	runCycles(cycles);
 }
 
 void Board::runCycles(int suggested) {

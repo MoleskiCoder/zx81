@@ -10,22 +10,31 @@
 Ula::Ula(const ColourPalette& palette, Board& bus)
 : m_palette(palette),
   m_bus(bus) {
-}
 
-void Ula::initialise() {
 	initialiseKeyboardMapping();
+
 	BUS().ports().ReadingPort.connect(std::bind(&Ula::Board_ReadingPort, this, std::placeholders::_1));
 	BUS().ports().WrittenPort.connect(std::bind(&Ula::Board_WrittenPort, this, std::placeholders::_1));
 
-	auto line = 0;
-	for (auto p = 0; p < 4; ++p) {
-		for (auto y = 0; y < 8; ++y) {
-			for (auto o = 0; o < 8; ++o, ++line) {
-				m_scanLineAddresses[line] = (p << 11) + (y << 5) + (o << 8);
-				m_attributeAddresses[line] = AttributeAddress + (((p << 3) + y) << 5);
-			}
+	RaisedPOWER.connect([this](EightBit::EventArgs) {
+		m_frameCounter = 0;
+		m_borderColour = 0;
+		m_flash = false;
+		LINECNTR() = 0;
+	});
+
+	Ticked.connect([this](EightBit::EventArgs) {
+		const auto available = cycles() / 2;
+		if (available > 0) {
+			proceed(cycles() / 2);
+			resetCycles();
 		}
-	}
+	});
+
+	BUS().CPU().ExecutedInstruction.connect([this](EightBit::Z80& cpu) {
+		if ((cpu.REFRESH() & Bit6) == 0)
+			cpu.lowerINT();
+	});
 }
 
 void Ula::flash() {
@@ -45,51 +54,14 @@ void Ula::renderRightHorizontalBorder(const int y) {
 }
 
 void Ula::renderHorizontalBorder(int x, int y, int width) {
-	std::fill_n(
-		m_pixels.begin() + y * RasterWidth + x,
-		width,
-		m_borderColour);
-	proceed(width / 2);
+	const size_t begin = y * RasterWidth + x;
+	for (int i = 0; i < width; ++i) {
+		m_pixels[begin + i] = m_borderColour;
+		tick();
+	}
 }
 
 void Ula::renderVRAM(const int y) {
-
-	assert(y >= 0);
-	assert(y < ActiveRasterHeight);
-
-	// Position in VRAM
-	const auto bitmapAddressY = m_scanLineAddresses[y];
-	const auto attributeAddressY = m_attributeAddresses[y];
-
-	// Position in pixel render 
-	const auto pixelBase = HorizontalRasterBorder + (y + UpperRasterBorder) * RasterWidth;
-
-	for (int byte = 0; byte < BytesPerLine; ++byte) {
-
-		const auto bitmapAddress = bitmapAddressY + byte;
-		const auto bitmap = BUS().VRAM().peek(bitmapAddress);
-
-		const auto attributeAddress = attributeAddressY + byte;
-		const auto attribute = BUS().VRAM().peek(attributeAddress);
-
-		const auto ink = attribute & EightBit::Chip::Mask3;
-		const auto paper = (attribute >> 3) & EightBit::Chip::Mask3;
-		const auto bright = !!(attribute & EightBit::Chip::Bit6);
-		const auto flash = !!(attribute & EightBit::Chip::Bit7);
-
-		const auto background = m_palette.getColour(flash && m_flash ? ink : paper, bright);
-		const auto foreground = m_palette.getColour(flash && m_flash ? paper : ink, bright);
-
-		for (int bit = 0; bit < 8; ++bit) {
-
-			const auto pixel = bitmap & (1 << bit);
-			const auto x = (~bit & EightBit::Chip::Mask3) | (byte << 3);
-
-			m_pixels[pixelBase + x] = pixel ? foreground : background;
-		}
-	}
-
-	proceed(ActiveRasterWidth / 2);
 }
 
 void Ula::renderActiveLine(const int y) {
@@ -100,33 +72,20 @@ void Ula::renderActiveLine(const int y) {
 
 void Ula::renderLine(const int y) {
 
-	// Start of vertical retrace
-	if (y == 0)
-		startFrame();
-
-	// Vertical retrace?
-	if ((y & ~EightBit::Chip::Mask4) == 0) {
-		proceed(RasterWidth / 2);
-		return;
+	if (y < VerticalRetraceLines) {
+		tick(RasterWidth);
+	} else if (y < (VerticalRetraceLines + UpperRasterBorder)) {
+		renderBlankLine(y - VerticalRetraceLines);
+	} else if (y < (VerticalRetraceLines + UpperRasterBorder + ActiveRasterHeight)) {
+		renderActiveLine(y - VerticalRetraceLines);
+	} else if (y < (VerticalRetraceLines + UpperRasterBorder + ActiveRasterHeight + LowerRasterBorder)) {
+		renderBlankLine(y - VerticalRetraceLines);
 	}
 
-	// Upper border
-	if ((y & ~EightBit::Chip::Mask6) == 0)
-		renderBlankLine(y - VerticalRetraceLines);
-
-	// Rendered from Spectrum VRAM
-	else if ((y & ~EightBit::Chip::Mask8) == 0)
-		renderActiveLine(y - VerticalRetraceLines);
-
-	// Lower border
-	else
-		renderBlankLine(y - VerticalRetraceLines);
-}
-
-void Ula::startFrame() {
-	if ((++m_frameCounter & EightBit::Chip::Mask4) == 0)
-		flash();
-	BUS().CPU().lowerINT();
+	if (NMI())
+		BUS().CPU().lowerNMI();
+	++LINECNTR();
+	tick(HorizontalRetrace);
 }
 
 void Ula::pokeKey(SDL_Keycode raw) {
@@ -149,7 +108,7 @@ void Ula::initialiseKeyboardMapping() {
 	m_keyboardMapping[0xEF] = { SDLK_0,		SDLK_9,		SDLK_8,		SDLK_7,		SDLK_6		};
 	m_keyboardMapping[0xDF] = { SDLK_p,     SDLK_o,     SDLK_i,		SDLK_u,		SDLK_y		};
 	m_keyboardMapping[0xBF] = { SDLK_RETURN,SDLK_l,		SDLK_k,		SDLK_j,		SDLK_h		};
-	m_keyboardMapping[0x7F] = { SDLK_SPACE,	SDLK_RSHIFT,SDLK_m,		SDLK_n,		SDLK_b		};
+	m_keyboardMapping[0x7F] = { SDLK_SPACE,	SDLK_PERIOD,SDLK_m,		SDLK_n,		SDLK_b		};
 }
 
 uint8_t Ula::findSelectedKeys(uint8_t row) const {
@@ -166,46 +125,55 @@ uint8_t Ula::findSelectedKeys(uint8_t row) const {
 }
 
 void Ula::Board_ReadingPort(const uint8_t& port) {
-	maybeReadingPort(port);
+
+	if ((BUS().ADDRESS().word & Bit0) != 0)
+		return;
+
+	const auto portHigh = BUS().ADDRESS().high;
+	m_selected = findSelectedKeys(portHigh);
+
+	const uint8_t value =
+		m_selected		// Bit 0-4  Keyboard column bits	(0 = Pressed)
+		| (1 << 4)		// Bit 5    Not used				(1)
+		| (1 << 5)		// Bit 6    Display Refresh Rate	(0 = 60Hz, 1 = 50Hz)
+		| (m_ear << 6);	// Bit 7    Cassette input			(0 = Normal, 1 = Pulse)
+
+	BUS().ports().writeInputPort(port, value);
+
+	if (!NMI()) {
+		m_mic = 0;
+		LINECNTR() = 0;
+	}
 }
 
 void Ula::Board_WrittenPort(const uint8_t& port) {
-	maybeWrittenPort(port);
-}
 
-void Ula::maybeWrittenPort(const uint8_t port) {
-	if (ignoredPort(port))
-		return;
-	writtenPort(port);
-}
+	switch (port) {
+	case 0xfd:
+		NMI() = false;
+		break;
+	case 0xfe:
+		NMI() = true;
+		break;
+	}
 
-void Ula::writtenPort(const uint8_t port) {
-
-	const auto value = BUS().ports().readOutputPort(port);
-
-	m_mic = (value & EightBit::Chip::Bit3) >> 3;
-	m_speaker = (value & EightBit::Chip::Bit4) >> 4;
-
-	setBorder(value & EightBit::Chip::Mask3);
-}
-
-void Ula::maybeReadingPort(const uint8_t port) {
-	if (ignoredPort(port))
-		return;
-	readingPort(port);
-}
-
-void Ula::readingPort(const uint8_t port) {
-	const auto portHigh = BUS().ADDRESS().high;
-	m_selected = findSelectedKeys(portHigh);
-	const uint8_t value = m_selected | (m_ear << 6);
-	BUS().ports().writeInputPort(port, value);
-}
-
-bool Ula::ignoredPort(const uint8_t port) const {
-	return !!(port & EightBit::Chip::Bit0);
+	m_mic = 1;
+	LINECNTR() = 0;
 }
 
 void Ula::proceed(int cycles) {
 	Proceed.fire(cycles);
+}
+
+EightBit::MemoryMapping Ula::mapping(uint16_t address) {
+
+	const bool display = (address & Bit15) && lowered(BUS().CPU().M1());
+	if (display)
+		address &= ~0b1100'0000'0000'0000;
+
+	if (address < 0x2000)
+		return { BUS().ROM(), 0x0000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadOnly };
+	if (address < 0x6000)
+		return { BUS().RAM(), 0x2000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadWrite };
+	return { BUS().unused(), 0x6000, 0xffff,  EightBit::MemoryMapping::AccessLevel::ReadOnly };
 }
