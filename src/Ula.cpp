@@ -35,6 +35,23 @@ Ula::Ula(const ColourPalette& palette, Board& bus)
 		if ((cpu.REFRESH() & Bit6) == 0)
 			cpu.lowerINT();
 	});
+
+	BUS().ReadingByte.connect([this](EightBit::EventArgs) {
+		m_displaying = (BUS().ADDRESS().word & Bit15) && lowered(BUS().CPU().M1());
+		if (m_displaying)
+			BUS().ADDRESS().word &= ~0b1000'0000'0000'0000;
+	});
+
+	BUS().ReadByte.connect([this](EightBit::EventArgs) {
+		if (m_displaying) {
+			m_displayData = BUS().DATA();
+			if ((m_displayData & Bit6) == 0) {
+				BUS().DATA() = 0;	// NOP
+				m_inverted = (m_displayData & Bit7) != 0;
+				m_displayCharacter = m_displayData & Mask5;
+			}
+		}
+	});
 }
 
 void Ula::flash() {
@@ -163,17 +180,4 @@ void Ula::Board_WrittenPort(const uint8_t& port) {
 
 void Ula::proceed(int cycles) {
 	Proceed.fire(cycles);
-}
-
-EightBit::MemoryMapping Ula::mapping(uint16_t address) {
-
-	const bool display = (address & Bit15) && lowered(BUS().CPU().M1());
-	if (display)
-		address &= ~0b1100'0000'0000'0000;
-
-	if (address < 0x2000)
-		return { BUS().ROM(), 0x0000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadOnly };
-	if (address < 0x6000)
-		return { BUS().RAM(), 0x2000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadWrite };
-	return { BUS().unused(), 0x6000, 0xffff,  EightBit::MemoryMapping::AccessLevel::ReadOnly };
 }

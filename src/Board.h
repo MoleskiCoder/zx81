@@ -24,11 +24,12 @@ public:
 	Board(const ColourPalette& palette, const Configuration& configuration);
 
 	EightBit::Z80& CPU() { return m_cpu; }
-	Ula &ULA() { return m_ula; }
+	Ula& ULA() { return m_ula; }
 	EightBit::InputOutput &ports() { return m_ports; }
 	EightBit::Rom& ROM() { return m_basicRom; }
 	EightBit::Ram& RAM() { return m_externalRam; }
-	EightBit::UnusedMemory& unused() { return m_unused; }
+	EightBit::UnusedMemory& unused8K() { return m_unused8K; }
+	EightBit::UnusedMemory& unused32K() { return m_unused32K; }
 
 	void plug(const std::string& path);
 	void loadSna(const std::string& path);
@@ -51,9 +52,10 @@ private:
 	EightBit::Z80 m_cpu;
 	Ula m_ula;
 
-	EightBit::Rom m_basicRom;								//0000h - 1FFFh  ROM(BASIC)
-	EightBit::Ram m_externalRam = 0x4000;					//2000h - 5FFFh  RAM(External RAM pack)
-	EightBit::UnusedMemory m_unused = { 0xa000, 0xff } ;	//6000h - FFFFh  Unused address space
+	EightBit::Rom m_basicRom;								//0000h - 1FFFh  BIOS ROM (8KBytes)
+	EightBit::UnusedMemory m_unused8K = { 0x2000, 0xff };	//2000h - 3FFFh  not used
+	EightBit::Ram m_externalRam = 0x4000;					//4000h - 7FFFh  External RAM (16 KBytes)
+	EightBit::UnusedMemory m_unused32K = { 0x8000, 0xff };	//8000h - FFFFh  not used, except during video decoding
 
 	EightBit::Disassembler m_disassembler;
 	EightBit::Profiler m_profiler;

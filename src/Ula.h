@@ -56,8 +56,6 @@ public:
 
 	const auto& pixels() const { return m_pixels; }
 
-	EightBit::MemoryMapping mapping(uint16_t address);
-
 private:
 	std::array<uint32_t, RasterWidth * RasterHeight> m_pixels;
 	const ColourPalette& m_palette;
@@ -67,6 +65,11 @@ private:
 	uint32_t m_borderColour;
 	bool m_nmiEnabled = false;
 	int m_lineCounter = 0;
+
+	bool m_displaying = false;
+	uint8_t m_displayData = 0;
+	bool m_inverted = false;
+	uint8_t m_displayCharacter = 0;
 
 	// Output port information
 	uint8_t m_border : 3;		// Bits 0 - 2

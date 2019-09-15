@@ -88,7 +88,13 @@ void Board::lowerPOWER() {
 }
 
 EightBit::MemoryMapping Board::mapping(uint16_t address) {
-	return ULA().mapping(address);	// The ULA is responsible for managing the BUS mapping
+	if (address < 0x2000)
+		return { ROM(), 0x0000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadOnly };
+	if (address < 0x4000)
+		return { unused8K(), 0x2000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadOnly };
+	if (address < 0x8000)
+		return { RAM(), 0x4000, 0xffff, EightBit::MemoryMapping::AccessLevel::ReadWrite };
+	return { unused32K(), 0x8000, 0xffff,  EightBit::MemoryMapping::AccessLevel::ReadOnly };
 }
 
 void Board::runFrame() {
